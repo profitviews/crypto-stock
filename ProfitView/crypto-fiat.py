@@ -51,23 +51,19 @@ class Trading(Link):
 			return True
 		except Exception as ex:
 			logger.info(f"Couldn't set up all venues. Exception: {ex}")
-			return False	
-	
-	@http.route
-	def get_trade(self, data):  # Make a synthetic trade
-		logger.info(f"Data: {data=}")
-		
+			return False
+
+	def crypto_fiat_trade(self, symbol, side, quantity):  # Executes a sythetic market order
 		# Get the record for the symbol: FX, Crypto and the "lot size" (in USD)
-		synthetic = self.synthetics.get(data['symbol'])
+		synthetic = self.synthetics.get(symbol)
 		usd_lot = synthetic['lot']
 		logger.info(f"{usd_lot=}")
 
-		fiat_quantity = float(data['quantity'])  # This should be the quantity of the fiat ccy to spend
-		logger.info(f"{fiat_quantity=}")
+		logger.info(f"{quantity=}")
 
 		fiat_rate = self.fx_venue.mark_price(synthetic['fx'])  # Get the conversion rate
 		logger.info(f"{fiat_rate=}")
-		usd_quantity = fiat_quantity*fiat_rate
+		usd_quantity = quantity*fiat_rate
 		logger.info(f"{usd_quantity=}")
 		
 		# Get the number of lots for this quantity
@@ -76,15 +72,22 @@ class Trading(Link):
 		usd_size = usd_lots*usd_lot  # The effective size possible for the FX trade
 		logger.info(f"{usd_size=}")
 		
-		crypto_side = data['side']
-		fx_side = "buy" if crypto_side == "sell" else "buy"
+		fx_side = "buy" if side == "sell" else "buy"
 		crypto_symbol = synthetic['crypto']
 		fx_symbol = synthetic['fx']
 
 		# Do the trade
 		fx_result = self.fx_venue.place_order(synthetic['fx'], fx_side, usd_size)
 		logger.info(f"{fx_result=}")
-		crypto_result = self.crypto_venue.place_order(synthetic['crypto'], crypto_side, usd_lots)
+		crypto_result = self.crypto_venue.place_order(synthetic['crypto'], side, usd_lots)
 		logger.info(f"{crypto_result=}")
 		
+		return fx_result, crypto_result
+		
+	@http.route
+	def get_trade(self, data):  # Make a synthetic trade
+		logger.info(f"Data: {data=}")
+		
+		result = self.crypto_fiat_trade(data['symbol'], data['side'], float(data['quantity']))
+				
 		return "Success"
