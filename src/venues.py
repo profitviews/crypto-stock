@@ -48,6 +48,14 @@ class Venue:
 			return i['lotSize']
 		return None
 	
+	def lot_value(self, symbol):
+		if i := self._instrument(symbol):
+			if i['isInverse']:
+				return self.lot(symbol)  # *1.0: Inverse instruments are quoted in USD
+			else:
+				return self.lot(symbol)*self.mark_price(symbol)
+		return None
+	
 	def standard_size(self, symbol, fiat_amount):
 		instrument = self._instrument(symbol)
 		if not instrument:
@@ -166,6 +174,7 @@ class BitMEX(Venue):
 					  , 'multiplier': 'float'
 					  , 'settlCurrency': 'str'
 					  , 'symbol': 'str'
+					  , 'isQuanto': 'bool'
 					  }
 	RATE_LIMIT_DELAY = 0.5
 
@@ -178,21 +187,18 @@ class BitMEX(Venue):
 			typed_instruments.append(ti)
 		return typed_instruments
 
-	def __init__(self, trading, rate_limit_delay=RATE_LIMIT_DELAY):
+	def _fetch_instruments(self):
+		"""Fetch all instruments from the API with pagination"""
 		instrument_count = 0
 		all_instruments_data = []
-		instrument_meta_data = {}
-		self.trading = trading
-		self.rate_limit_delay = rate_limit_delay
-
-		while True:  # Max of 500 results per call, so paginate
-			         # See: https://www.bitmex.com/api/explorer/#!/Instrument/Instrument_get
-			instruments = trading.call_endpoint(
+		
+		while True:
+			instruments = self.trading.call_endpoint(
 				self.NAME,
 				self.INSTRUMENT_ENDPOINT,
 				'public',
 				method='GET', params={
-					'count': 500, 
+					'count': self.INSTRUMENT_PAGE_SIZE,
 					'start': instrument_count,
 					'columns': json.dumps([*self.ALGO_PARAMETERS])
 				})
@@ -202,21 +208,62 @@ class BitMEX(Venue):
 			instrument_count += current_count
 			logger.info(f"{instrument_count=}")
 			if current_count < self.INSTRUMENT_PAGE_SIZE: break
-			time.sleep(self.rate_limit_delay)  # To avoid rate limits
+			time.sleep(self.rate_limit_delay)
 		
-		super().__init__(self.__type_parameters(all_instruments_data), self.NAME)
+		return all_instruments_data
+
+	def __init__(self, trading, rate_limit_delay=RATE_LIMIT_DELAY):
+		self.trading = trading
+		self.rate_limit_delay = rate_limit_delay
+		instruments_data = self._fetch_instruments()
+		super().__init__(self.__type_parameters(instruments_data), self.NAME)
+
+	def get_instruments(self):
+		return self._instruments
+
+	def get_instrument(self, symbol):
+		return self._instrument(symbol)
 
 	def mark_price(self, symbol):
-		d = self._instrument(symbol)
-		if d['isInverse']: mark_price = 1/d['markPrice']
-		else: mark_price = d['markPrice']
-		return mark_price
+		return self._instrument(symbol)['markPrice']
+	
+	def get_contract_multiplier(self, symbol):
+		return self._instrument(symbol)['multiplier']
 		
-	def standard_size(self, symbol, fiat_amount):
+	def get_btc_mark_price(self):
+		"""Get the XBT mark price from the BitMEX API."""
+		xbtparams = self.trading.call_endpoint(
+			self.NAME,
+			self.INSTRUMENT_ENDPOINT,
+			'public',
+			method='GET', params={
+				'symbol': 'XBT', 'columns': 'markPrice'
+		})
+		logger.info(f"{xbtparams=}")
+		mark_price = float(xbtparams['data'][0]['markPrice'])
+		logger.info(f"{mark_price=}")
+		return mark_price
+	
+	def get_contract_usd_price(self, symbol):
+		"""Get the contract price from the BitMEX API."""
+		logger.info(f"{symbol=}")
+		adjustment_multiplier = 0.00001  # Not clear why this is needed.
+
 		mark_price = self.mark_price(symbol)
+		logger.info(f"{mark_price=}")
+		multiplier = self.get_contract_multiplier(symbol)
+		logger.info(f"{multiplier=}")
+		btc_mark_price = self.get_btc_mark_price()
+		logger.info(f"{btc_mark_price=}")
+		price = btc_mark_price*0.001*mark_price*multiplier*adjustment_multiplier
+		logger.info(f"{price=}")
+		return price
 
+	def standard_size(self, symbol, dollar_amount):
 		d = self._instrument(symbol)
+		mark_price = d['markPrice']
 
+		if d['isInverse']: mark_price = 1/mark_price
 		mark_multiplier = abs(float(d['multiplier']))*mark_price
 		
 		xbtparams = self.trading.call_endpoint(
@@ -229,17 +276,18 @@ class BitMEX(Venue):
 		xbtMark = float(xbtparams['data'][0]['markPrice'])
 
 		USDt_in_USD = 1e-6  # USDt in $: https://blog.bitmex.com/api_announcement/api-usage-for-usdt-contracts/
-					        # and: https://www.bitmex.com/app/restAPI 
+		                    # and: https://www.bitmex.com/app/restAPI 
 		BTC_in_SATOSHI = 1e8
 		mark = xbtMark/BTC_in_SATOSHI if d['settlCurrency'] == 'XBt' else USDt_in_USD
+		minimum_dollar_size = int(d['lotSize'])*mark*mark_multiplier
+		assert(dollar_amount > minimum_dollar_size)
+		dollar_multiple = dollar_amount//minimum_dollar_size;
 		lot = self.lot(symbol)
-		minimum_fiat_size = int(lot)*mark*mark_multiplier
-		assert(fiat_amount > minimum_fiat_size)
-		fiat_multiple = fiat_amount//minimum_fiat_size
-		return fiat_multiple*lot
-
+		return dollar_multiple*lot
+	
 	def place_order(self, symbol, side, quantity, order_type='market', price=None):
 		side = side.capitalize()
+		# quantity depends on whether the instrument is 
 		if order_type == 'market':
 			# Use ProfitView's create_market_order method
 			order = self.trading.create_market_order(
@@ -254,7 +302,7 @@ class BitMEX(Venue):
 				venue=self.NAME,
 				symbol=symbol,
 				side=side,
-				quantity=quantity,
+				size=quantity,
 				price=price
 			)
 		else:
@@ -274,12 +322,17 @@ class OANDA(Venue):
 		logger.info(f"{endpoint=}")
 		self.trading = trading
 		self.account_id = account_id
+		logger.info(f"{self.account_id=}")
 		self.api_key = api_key
+		logger.info(f"{self.api_key=}")
 		self.HEADERS['Authorization'] = f'Bearer {self.api_key}'
 		self.HEADERS['Content-Type'] = 'application/json'
+		logger.info(f"{self.HEADERS=}")
 		self.instruments_endpoint = f'{endpoint}/{self.INSTRUMENTS_ENDPOINT}'.format(account_id=account_id)
+		logger.info(f"{self.instruments_endpoint=}")
 		self.pricing_endpoint = f'{endpoint}/{self.PRICING_ENDPOINT}'.format(account_id=account_id)
 		self.trading_endpoint = f'{endpoint}/{self.TRADING_ENDPOINT}'.format(account_id=account_id)
+		logger.info(f"{self.trading_endpoint=}")
 		# logger.info(f"{self.instruments_endpoint=}")
 		# logger.info(f"{self.pricing_endpoint=}")
 		instruments_data = self.get_instruments()
@@ -306,9 +359,13 @@ class OANDA(Venue):
 		return instruments
 
 	def mark_price(self, symbol):
+		endpoint = self.pricing_endpoint.format(account_id=self.account_id)
+		logger.info(f"{endpoint=}")
+		headers = self.HEADERS
+		logger.info(f"{headers=}")
 		response = requests.get(
-			self.pricing_endpoint.format(account_id=self.account_id),
-			headers=self.HEADERS,
+			endpoint,
+			headers=headers,
 			params={'instruments': symbol}
 		)
 		response.raise_for_status()
@@ -316,10 +373,14 @@ class OANDA(Venue):
 		return float(pricing_data['prices'][0]['closeoutAsk'])
 
 	def place_order(self, symbol, side, quantity, order_type='MARKET'):
+		logger.info(f"{symbol=}")
 		side = side.lower()
 		logger.info(f"OANDA: {side=}")	
 		quantity = quantity if side == 'buy' else -quantity
 		logger.info(f"OANDA: {quantity=}")	
+
+		quantity = int(quantity)
+
 		order_data = {
 			"order": {
 				"instrument": symbol,
@@ -329,7 +390,11 @@ class OANDA(Venue):
 			}
 		}
 		logger.info(f"OANDA: {order_data=}")
-		response = requests.post(self.trading_endpoint, json=order_data, headers=self.HEADERS)
+		endpoint = self.trading_endpoint.format(account_id=self.account_id)
+		logger.info(f"{endpoint=}")
+		headers = self.HEADERS
+		logger.info(f"{headers=}")
+		response = requests.post(endpoint, json=order_data, headers=headers)
 		response.raise_for_status()
 		return response.json()
 

@@ -6,7 +6,7 @@ from pathlib import Path
 import asyncio
 
 
-env_path = Path(__file__).parent.parent.parent / 'prod-bot' / '.env'
+env_path = Path(__file__) / '.env'  # Adjust this path as needed
 load_dotenv(env_path)
 
 # Configure logging

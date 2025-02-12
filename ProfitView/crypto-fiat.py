@@ -1,67 +1,47 @@
-from profitview import Link, logger, cron, http
-import time 
+from profitview import Link, logger, http
 import os
 import json
-import builtins
 import math
-from my.venues import Venue, BitMEX, OANDA
+from my.venues import BitMEX, OANDA
 from dotenv import load_dotenv
 
-cron.options['auto_start'] = False
 
 load_dotenv()
 
 
 class Trading(Link):
-	INTERVAL = 6000          # Time (seconds) between limit order resets
-	VENUE = 'BitMEX'
-	RUNGS = 5              
-	MULT = .15               # Multiple of base increment to use between grids
-	BASE_SIZE = 120        # In US$: minimum notional value of a contract (rounded down to lot value multiple)
-	SIZE = 7               # Multiple of BASE_SIZE
-	LIMIT = 15              # Multiple of BASE_SIZE
-	QUOTE_DELAY = 2        # Time to wait initially for a first bid/ask quote
-	RATE_LIMIT_DELAY = .1  
-	
 	OANDA_API_PRACTICE_URL = os.getenv("OANDA_API_PRACTICE_URL")
 	OANDA_API_LIVE_URL = os.getenv("OANDA_API_LIVE_URL")
-	OANDA_API_KEY = os.getenv("OANDA_API_KEY")
-	OANDA_ACCOUNT_ID = os.getenv("OANDA_ACCOUNT_ID")
+	OANDA_API_KEY = os.getenv("OANDA_DEMO_API_KEY")
+	OANDA_ACCOUNT_ID = os.getenv("OANDA_DEMO_ACCOUNT_ID")
 	OANDA_ENV = "practice"
-	OANDA_STREAM_URL = (
-    	f"wss://stream-fx{OANDA_ENV}.oanda.com/v3/accounts/{OANDA_ACCOUNT_ID}/pricing/stream?instruments=EUR_USD"
-	)
-	
-	ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
-	ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET")
-	ALPACA_PAPER_API_KEY = os.getenv("ALPACA_PAPER_API_KEY")
-	ALPACA_PAPER_API_SECRET = os.getenv("ALPACA_PAPER_API_SECRET")
-	
-	symbol = 'XBTUSD'
-	
-	synthetics = {
-		"XBTEUR": {"fx": "EUR_USD", "crypto": "XBTUSD"},	
-		"XBTJPY": {"fx": "USD_JPY", "crypto": "XBTUSD"},	
-		"XBTAUD": {"fx": "AUD_USD", "crypto": "XBTUSD"},	
-		"XBTGBP": {"fx": "GBP_USD", "crypto": "XBTUSD"},
-		"ETHEUR": {"fx": "EUR_USD", "crypto": "ETHUSD"},	
-		"ETHGBP": {"fx": "GBP_USD", "crypto": "ETHUSD"}
+			
+	synthetic_mapping = {
+		"EUR": "EUR_USD",	
+		"JPY": "USD_JPY",
+		"AUD": "AUD_USD",
+		"GBP": "GBP_USD",
 	}
 	
-	quoted = False
+	cryptos = ["XBT", "ETH", "AAVE", "ADA", "DOGE", "DOT", "LINK", "LTC", "XRP"]
 	
     def on_start(self):
-		time.sleep(self.QUOTE_DELAY)  # Wait for a first quote
-		# Get parameters specific to this instrument
 		if not self.venue_setup():
 			logger.error(f"Error getting instrument data from venues - ending algo")
 			raise RuntimeError()
-		logger.info(f"Completed {self.VENUE} specific setup")
-		logger.info(f"EUR_USD mark price: {self.fx_venue.mark_price('EUR_USD')}")
-		logger.info(f"EUR_USD standard size: {self.fx_venue.standard_size('EUR_USD', 1000)}")
-		logger.info(f"XBTUSD mark price: {self.crypto_venue.mark_price('XBTUSD')}")
-		logger.info(f"XBTUSD standard size: {self.crypto_venue.standard_size('XBTUSD', 1000)}")
-		cron.start(run_now=True)
+	
+		self.synthetics = {  # Construct a structure of synthetic currencies of the form [fiat][crypto]
+			                 # and the mapping to their actual ccys, and add the USD lot size implied by
+                             # the crypto lot size
+			f"{crypto}{currency}": {
+				"fx": self.synthetic_mapping[currency], 
+				"crypto": f"{crypto}USD",
+				"lot": self.crypto_venue.get_contract_usd_price(f"{crypto}USD")
+			}
+			for crypto in self.cryptos
+			for currency in self.synthetic_mapping.keys()
+		}
+
 
 	def venue_setup(self):
 		try:
@@ -71,39 +51,40 @@ class Trading(Link):
 			return True
 		except Exception as ex:
 			logger.info(f"Couldn't set up all venues. Exception: {ex}")
-			return False
-	
-	def get_lot_size(self, symbol):
-		synthetic = self.synthetics[symbol]
-		lot_size = math.lcm(self.fx_venue.lot(synthetic['fx']), self.crypto_venue.lot(synthetic['crypto']))
-		logger.info(f"{symbol} lot size = {lot_size}")
-		return lot_size
-			
-	def place_market_order(self, symbol, side, quantity):
-		side = side.lower()
-		if synthetic := self.synthetics.get(symbol):
-			if quantity % self.get_lot_size(symbol) == 0:
-				fx_side = "buy" if side == "sell" else "sell"
-				self.fx_venue.place_order(synthetic['fx'], fx_side, quantity)  # quantity must be corrected
-				self.crypto_venue.place_order(synthetic['crypto'], side, quantity)  # quantity must be corrected
-
-	@cron.run(every=INTERVAL)
-	def update_signal(self):
-		"""Do stuff"""
-		pass
+			return False	
 	
 	@http.route
-	def get_lot(self, data):
+	def get_trade(self, data):  # Make a synthetic trade
 		logger.info(f"Data: {data=}")
-		return self.get_lot_size(data['symbol'])
+		
+		# Get the record for the symbol: FX, Crypto and the "lot size" (in USD)
+		synthetic = self.synthetics.get(data['symbol'])
+		usd_lot = synthetic['lot']
+		logger.info(f"{usd_lot=}")
 
-	@http.route
-	def get_market_order(self, data):
-		logger.info(f"Data: {data=}")
-		self.place_market_order(data['symbol'], data['side'], int(data['quantity']))
-		return "Placed market order"
+		fiat_quantity = float(data['quantity'])  # This should be the quantity of the fiat ccy to spend
+		logger.info(f"{fiat_quantity=}")
 
+		fiat_rate = self.fx_venue.mark_price(synthetic['fx'])  # Get the conversion rate
+		logger.info(f"{fiat_rate=}")
+		usd_quantity = fiat_quantity*fiat_rate
+		logger.info(f"{usd_quantity=}")
+		
+		# Get the number of lots for this quantity
+		usd_lots = math.floor(usd_quantity/usd_lot)  # As much of the quantity as can be traded on the crypto side
+		if usd_lots == 0: return "Failure: quantity less than crypto lot size"
+		usd_size = usd_lots*usd_lot  # The effective size possible for the FX trade
+		logger.info(f"{usd_size=}")
+		
+		crypto_side = data['side']
+		fx_side = "buy" if crypto_side == "sell" else "buy"
+		crypto_symbol = synthetic['crypto']
+		fx_symbol = synthetic['fx']
 
-def round_to(value, increment):
-	"""Round `value` to an exact multiple of `increment`"""
-	return round(value/increment)*increment
+		# Do the trade
+		fx_result = self.fx_venue.place_order(synthetic['fx'], fx_side, usd_size)
+		logger.info(f"{fx_result=}")
+		crypto_result = self.crypto_venue.place_order(synthetic['crypto'], crypto_side, usd_lots)
+		logger.info(f"{crypto_result=}")
+		
+		return "Success"
