@@ -2,6 +2,9 @@ from profitview import Link, logger, http
 import os
 import json
 import math
+
+# See venues.py in the repo. 
+# I've chosen to put the code in the `my` directory under `src` in the container
 from my.venues import BitMEX, OANDA
 from dotenv import load_dotenv
 
