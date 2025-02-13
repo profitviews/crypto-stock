@@ -1,6 +1,6 @@
 import logging
 import os
-from src.venues import OANDA
+from my.venues import OANDA
 from dotenv import load_dotenv
 from pathlib import Path
 import asyncio

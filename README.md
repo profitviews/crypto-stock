@@ -1,87 +1,105 @@
-You may have noted my previous blogs have explored some (relatively) esoteric trading strategies: [News signals](https://profitview.net/blog/what-i-learned-when-building-an-ai-news-trading-bot){:target="_blank"}, and getting signals from [DeFi vaults](https://profitview.net/blog/how-i-used-deepseek-to-build-a-profitable-defi-trading-algorithm-in-one-morning){:target="_blank"}.  That was to demonstrate ProfitView's flexibility and extensibility.
+In my previous blog posts, I demonstrated some relatively esoteric trading strategies, such as using [AI News signals](https://profitview.net/blog/what-i-learned-when-building-an-ai-news-trading-bot) and building [DeFi vaults](https://profitview.net/blog/how-i-used-deepseek-to-build-a-profitable-defi-trading-algorithm-in-one-morning). I wanted to show just how flexible and extensible ProfitView is when it comes to algorithmic trading.
 
-ProfitView currently support crypo exchange - but I was thinking that given our algo platform is **full** Python 3, this means that _if you want to_, you can yourself extend to other asset classes prior to us getting around to adding support.
+Currently, **ProfitView supports crypto exchanges** out of the box. However, because the algo platform provides **full Python 3** support, you can extend ProfitView to other asset classes yourself, before we officially add direct support. Of course, those who rely on "Bots" (which require built-in exchange connections) can't directly do this. But if you're using the Trading side of the platform, you're in full control of execution logic—which means you can connect to any broker API that Python can handle.
 
-Of course, this won't work for those writing _Bots_ (since it is the end-user who needs the exchange connection).  But we do still fully support our Trading side of the platform, which leaves you in control of execution.
+## Revisiting the BitMEX Grid Bot
 
-Writing this blog brought me back to a previous [webinar with BitMEX](https://profitview.net/events/getting-started-with-trading-bots){:target="_blank"}.  In preparation for that, I wrote a simple grid trading algorithm.  But there was some boilerplate complexities (which our Signal system now makes unnecessary).  Because, in order to bring in the other asset class platforms I couldn't use the Signal system, I would be helpful to re-use the code from that webinar.
+Writing this blog reminded me of our [BitMEX webinar](https://profitview.net/events/2023-12-08-getting-started-with-trading-bots). In preparation for that webinar, I built a simple grid trading algorithm. There was some boilerplate code back then that our **Signal** system now makes unnecessary. However, to bring in other, non-crypto platforms, I couldn't simply rely on the Signal system alone. It would be helpful to re-use some of that older webinar code for this multi-venue approach.
 
-Of course, the way to do this would not be to cut-and-paste - bad form!  I must abstract the common code into a package and import it into _both_ algos.  So, let's do that.
+Of course, you never want to just copy and paste. A better approach is to **abstract common code** into a package and import that package into any new algos—keeping your code DRY (Don't Repeat Yourself).
+
+---
 
 ## Abstracting the Common Code
 
-The algo we demonstrated in the BitMEX webinar was a simple grid trading algorithm.  You can find the code in our github repo 
-[Grid Bot](https://github.com/profitviews/grid-bot){:target="_blank"} under `src/webinar/2/Starter.py`.  
-There code I wanted to reuse abstracts a `Venue` class, in particular so that exchange specifics like tick and lot sizes along 
-with API limits and so on are handled in a central place.
+The original BitMEX grid bot from the webinar is available on our [GitHub repo](https://github.com/profitviews/grid-bot/blob/main/src/webinar/2/Starter.py) under `src/webinar/2/Starter.py`. The main part I wanted to reuse is the `Venue` class, which wraps exchange-specific details like:
 
-The natural way to share this code would be to put it into a package and import it into both algos.  But ProfitView's algo platform consists 
-of containers with code written as "special" Python files how would I create  a package that could be imported into both algos?
+- Tick and lot sizes  
+- API rate-limits  
+- Other exchange nuances  
 
-In fact, if your have an ActiveTrader subscription, you can connect to your container via `ssh`.  So, your can write your package elsewhere and just `scp` it into the container.
+By centralizing these details, you can write higher-level trading logic without worrying about all the fiddly exchange details in each new algorithm.
 
-In ProfitView, in your Signals tab, click Settings and you'll and under SSH Key, you'll see the `ssh` command you need to connect to your container.
+**But how do we share this code across algos in ProfitView, since our algo platform uses containers and "special" Python files?**  
+
+### Creating and Sharing a Python Package in ProfitView
+
+If you have an **ActiveTrader subscription**, you can connect directly to your container via `ssh`. This means you can create a reusable Python package locally and then transfer it into the container—where multiple algos can import it.
+
+1. In the **Signals** tab of ProfitView, click **Settings**, and under **SSH Key**, you'll see the `ssh` command for connecting to your container.
+2. Once you've connected, you can `scp` (secure copy) or otherwise upload your package files into your container's file system.
 
 ![ssh to container](ssh-to-container.png)
 
-Actually I did it differently.  I use Linux (Ubuntu).  I'm sure this will work on Macs as well and there will be a way to do it on Windows.  You can use [`sshfs`](https://github.com/libfuse/sshfs){:target="_blank"} to mount the container into your local file system.  Then, you can just develop your package locally and just copy it into the container when you need to test.  This works flawlessly.  It even works with the ProfitView feature of updating code while the algo runs: you just copy it over, and the next code path will use the new version.  Adapt this the line below to your container's details.
+#### Using `sshfs` for Seamless Development
 
-Deciding on `bots` as the mounted name of the container (and mounting it in the home directory), the command is:
+On Linux (Ubuntu) or macOS (and possibly Windows with extra tools), you can use [`sshfs`](https://github.com/libfuse/sshfs) to *mount* the remote container's filesystem locally. This makes iterative development painless: you can edit files in your usual local IDE, and simply copy updates into the container when you need to test.
+
+For example, if you decide to mount the container at `~/bots`, you might run something like:
 
 ```bash
 cd ~
-sshfs -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,kernel_cache,auto_cache -p 12345 trader@12.34.56.78: bots
+sshfs -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,kernel_cache,auto_cache \
+  -p 12345 trader@12.34.56.78: bots
 ```	
 
-I extracted out the `Venue` hierachy into a `venues.py` file and decided on `my` as "my" local package name:
+(Adjust the port, username, and IP to match your container details.)
+
+Then you could create a `my` package directory:
 
 ```bash
 mkdir -p ~/bots/src/my
 cp my/venues.py ~/bots/src/my
 ```
 
-As I developed `venues.py`, I just repeated `cp my/venues.py ~/bots/src/my` to update the container.  As I mentioned, this can be done while the algo is running.
+Now both your old BitMEX algo and any new algos can do `from my.venues import Venue` (or similar). Any updates you make are automatically reflected in the container on the fly as the algo is running.
 
-## Incorporating Non-crypto Venues
+## Incorporating Non-Crypto Venues
 
-My intention in this blog was to show a real-world use-case involving a supported venue (BitMEX) and a non-crypto venue.  Looking around, and thinking of a good project that worked with FX, I found that OANDA has a [REST API](https://developer.oanda.com/rest-live-v20/){:target="_blank"} that would be perfect for this.  I got an account and got it basically working.  Good.
+I wanted a real example of combining a **supported** crypto venue (BitMEX) with a **non-crypto** venue. I decided to try OANDA for Forex (FX), since they have a [REST API](https://developer.oanda.com/rest-live-v20). After setting up an account, I got basic REST calls working.
 
-My idea was to create a synthetic currency of the form `[crypto][fiat]`.  I would sell a (non-US dollar) fiat currency on the FX venue for dollars then buy a crypto perp (against dollar).  The effect should be that I've sold the fiat and bought the crypto - that is I had a position in the `[crypto][fiat]` synthetic currency.
+### Synthetic Currency Trading
 
-Initially I thought I'd go further and write a full trading algorithm for it.  In this effort I came up against a problem: while [OANDA docs](https://developer.oanda.com/rest-live-v20/development-guide/){:target="_blank"} suggest there's a Websocket API, I couldn't get it to work.  I reached out to OANDA support but they seemed unable to help.  On their Github there's a an example project [py-api-streaming](https://github.com/oanda/py-api-streaming){:target="_blank"} - but it simply didn't work and it seems unmaintained.
+My idea was to create a *synthetic currency* of the form `[crypto][fiat]`. Suppose you want to "sell" a non-USD fiat currency on an FX venue and simultaneously "buy" a crypto perpetual on an exchange, each side denominated in USD. The net effect is a position in `[crypto][fiat]`.
 
-**If anyone at OANDA wants to help me out, I'd be very happy to add a full trading algorithm.**
+While I'd hoped to go further and show a fully automated trading algorithm, I hit a snag: I couldn't get OANDA's WebSocket to work. (If anyone at OANDA is reading this, I'd love some help!) OANDA's GitHub repo has a [py-api-streaming](https://github.com/oanda/py-api-streaming) example, but it seems unmaintained.
 
-Nevertheless, I can demostrate trading these synthetic currencies.  Once the Venue's been constructed the logic is straightforward:
+Still, I can demonstrate the general approach with a code snippet. Once you have a `Venue` that handles OANDA (for example, in `venues.py`), your trading logic can be as simple as:
 
 ```python
-	def crypto_fiat_trade(self, symbol, side, quantity):  # Executes a sythetic market order
-
-		# Get the record for the symbol: FX, Crypto and the crypto's "lot size" (in USD)
-		# See the Github for the full code
-		synthetic = self.synthetics.get(symbol)  # Returns a structure like {'fx': 'EUR_USD', 'crypto': 'ETHUSD', 'lot': 237.0}
-		usd_lot = synthetic['lot']  # The size of the crypto lot in USD
-		fiat_rate = self.fx_venue.mark_price(synthetic['fx'])  # Get the USD conversion rate
-		usd_quantity = quantity*fiat_rate  # The quantity in USD
-		
-		# Get the number of lots for this quantity
-		usd_lots = math.floor(usd_quantity/usd_lot)  # As much of the quantity as can be traded on the crypto side
-		if usd_lots == 0: return "Failure: quantity less than crypto lot size"
-		usd_size = usd_lots*usd_lot  # The effective size possible for the FX trade
-		
-		fx_side = "buy" if side == "sell" else "buy"
-		crypto_symbol = synthetic['crypto']
-		fx_symbol = synthetic['fx']
-
-		# Do the trade
-		fx_result = self.fx_venue.place_order(synthetic['fx'], fx_side, usd_size)
-		crypto_result = self.crypto_venue.place_order(synthetic['crypto'], side, usd_lots)
-		
-		return fx_result, crypto_result
+def crypto_fiat_trade(self, symbol, side, quantity):
+    """Executes a synthetic market order that sells fiat for USD and buys crypto-perp for USD."""
+    # Example structure: {'fx': 'EUR_USD', 'crypto': 'ETHUSD', 'lot': 237.0}
+    synthetic = self.synthetics.get(symbol)
+    
+    # 'lot' is the notional size in USD used for the crypto side
+    usd_lot = synthetic['lot']
+    
+    # Convert the input quantity (in fiat) to USD, based on the current FX rate
+    fiat_rate = self.fx_venue.mark_price(synthetic['fx'])
+    usd_quantity = quantity * fiat_rate
+    
+    # Calculate how many "lots" fit into that quantity
+    usd_lots = math.floor(usd_quantity / usd_lot)
+    if usd_lots == 0:
+        return "Failure: quantity too small for crypto lot size"
+    
+    # If I'm selling crypto, I'd be buying fiat, etc.
+    fx_side = "buy" if side == "sell" else "sell"
+    
+    # Execute on both venues
+    fx_result = self.fx_venue.place_order(synthetic['fx'], fx_side, usd_lots * usd_lot)
+    crypto_result = self.crypto_venue.place_order(synthetic['crypto'], side, usd_lots)
+    
+    return fx_result, crypto_result
 ```
 
-The code is in the repo [here](https://github.com/profitviews/crypto-fiat){:target="_blank"}.  The Bot code is in `ProfitView/crypto-fiat.py` and the library code is in `my/venues.py`.  I also have a Jupyter notebook in the repo that I used to develop the library code - see `src/crypto-fiat.ipynb`.
+The main bot script is here in `ProfitView/crypto-fiat.py`, while the library code lives in `my/venues.py`. I used a Jupyter notebook (`src/crypto-fiat.ipynb`) for initial development and testing.
 
-## Conclusion
+## Conclusion and Next Steps
 
-An actual trading algorithm could be fairly easily written even without a functioning Websocket API.  There is Websocket code that *should* work in `my/venues.py` - if the OANDA guys (or anyone else) can help me out with their end.  I've also implemented a `Venue` for [Alpaca](https://alpaca.markets/){:target="_blank"} - but that will be for another blog.
+Even without a functioning WebSocket for OANDA, it's straightforward to combine venues for a *synthetic currency* approach, thanks to Python's flexibility and ProfitView's container system. If OANDA (or anyone else) can help me get the streaming API working, I'd love to write a fully automated multi-venue trading bot.
+
+In a future blog post, I'll also show how to integrate **Alpaca** for equities. In the meantime, feel free to check out the code for this OANDA/BitMEX example, and explore how easy it is to abstract your code into a `my` package. With the power of SSH access and Python, **you** can add any asset class to your strategy stack—even before we officially support it.
+
+If you have any questions or want to swap ideas, feel free to reach out!
