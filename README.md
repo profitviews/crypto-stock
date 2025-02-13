@@ -1,10 +1,12 @@
+See [our blogs](https://profitview.net/blog) for more articles like this.
+
 In my previous blog posts, I demonstrated some relatively esoteric trading strategies, such as using [AI News signals](https://profitview.net/blog/what-i-learned-when-building-an-ai-news-trading-bot) and building [DeFi vaults](https://profitview.net/blog/how-i-used-deepseek-to-build-a-profitable-defi-trading-algorithm-in-one-morning). I wanted to show just how flexible and extensible ProfitView is when it comes to algorithmic trading.
 
 Currently, **ProfitView supports crypto exchanges** out of the box. However, because the algo platform provides **full Python 3** support, you can extend ProfitView to other asset classes yourself, before we officially add direct support. Of course, those who rely on "Bots" (which require built-in exchange connections) can't directly do this. But if you're using the Trading side of the platform, you're in full control of execution logic—which means you can connect to any broker API that Python can handle.
 
 ## Revisiting the BitMEX Grid Bot
 
-Writing this blog reminded me of our [BitMEX webinar](https://profitview.net/events/2023-12-08-getting-started-with-trading-bots). In preparation for that webinar, I built a simple grid trading algorithm. There was some boilerplate code back then that our **Signal** system now makes unnecessary. However, to bring in other, non-crypto platforms, I couldn't simply rely on the Signal system alone. It would be helpful to re-use some of that older webinar code for this multi-venue approach.
+Writing this blog reminded me of our [BitMEX webinar](https://profitview.net/events/getting-started-with-trading-bots). In preparation for that webinar, I built a simple grid trading algorithm. There was some boilerplate code back then that our **Signal** system now makes unnecessary. However, to bring in other, non-crypto platforms, I couldn't simply rely on the Signal system alone. It would be helpful to re-use some of that older webinar code for this multi-venue approach.
 
 Of course, you never want to just copy and paste. A better approach is to **abstract common code** into a package and import that package into any new algos—keeping your code DRY (Don't Repeat Yourself).
 
@@ -12,7 +14,7 @@ Of course, you never want to just copy and paste. A better approach is to **abst
 
 ## Abstracting the Common Code
 
-The original BitMEX grid bot from the webinar is available on our [GitHub repo](https://github.com/profitviews/grid-bot/blob/main/src/webinar/2/Starter.py) under `src/webinar/2/Starter.py`. The main part I wanted to reuse is the `Venue` class, which wraps exchange-specific details like:
+The original BitMEX grid bot from the webinar is available on our [GitHub repo](https://github.com/profitviews/grid-bot) under `src/webinar/2/Starter.py`. The main part I wanted to reuse is the `Venue` class, which wraps exchange-specific details like:
 
 - Tick and lot sizes  
 - API rate-limits  
