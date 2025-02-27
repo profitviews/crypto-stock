@@ -442,7 +442,7 @@ class Alpaca(Venue):
 	def mark_price(self, symbol):
 		try:
 			url = self.pricing_endpoint.format(symbol=symbol)
-			print(f"Fetching quote from: {url}")
+			logger.debug(f"Fetching quote from: {url}")
 			response = requests.get(url, headers=self.HEADERS)
 			response.raise_for_status()
 			pricing_data = response.json()
