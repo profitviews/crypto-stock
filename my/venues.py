@@ -404,70 +404,145 @@ class OANDA(Venue):
 
 
 class Alpaca(Venue):
-	NAME = 'Alpaca'
-	INSTRUMENTS_ENDPOINT = 'v2/assets'
-	PRICING_ENDPOINT = 'v2/stocks/{symbol}/quotes/latest'
-	HEADERS = {'Content-Type': 'application/json'}
-	
-	def __init__(self, trading, api_key, secret_key, trading_endpoint='https://paper-api.alpaca.markets', data_endpoint='https://data.alpaca.markets'):
-		self.trading = trading
-		self.api_key = api_key
-		self.secret_key = secret_key
-		self.HEADERS['APCA-API-KEY-ID'] = self.api_key
-		self.HEADERS['APCA-API-SECRET-KEY'] = self.secret_key
-		
-		# Use trading endpoint for assets
-		self.instruments_endpoint = f'{trading_endpoint}/{self.INSTRUMENTS_ENDPOINT}'
-		
-		# Use data endpoint for quotes
-		self.pricing_endpoint = f'{data_endpoint}/{self.PRICING_ENDPOINT}'
-		
-		instruments_data = self.get_instruments()
-		super().__init__(instruments_data, self.NAME)
-	
-	def get_instruments(self):
-		response = requests.get(self.instruments_endpoint, headers=self.HEADERS)
-		response.raise_for_status()
-		data = response.json()
-		instruments = [
-			{
-				'symbol': i['symbol'],
-				'tickSize': 0.01,  # Alpaca typically supports decimal precision
-				'lotSize': 1  # Alpaca uses whole shares
-			}
-			for i in data if i['tradable']
-		]
-		return instruments
+    NAME = 'Alpaca'
+    INSTRUMENTS_ENDPOINT = 'v2/assets'
+    PRICING_ENDPOINT = 'v2/stocks/{symbol}/quotes/latest'
+    HEADERS = {'Content-Type': 'application/json'}
+    
+    def __init__(self, trading, api_key, secret_key, 
+				 trading_endpoint='https://paper-api.alpaca.markets', 
+				 data_endpoint='https://data.alpaca.markets',
+				 stream_url='wss://stream.data.alpaca.markets/v2/iex'):  # Use 'sip' for paid plan
+        self.trading = trading
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.stream_url = stream_url
+        self.HEADERS['APCA-API-KEY-ID'] = self.api_key
+        self.HEADERS['APCA-API-SECRET-KEY'] = self.secret_key
+        
+        # Use trading endpoint for assets
+        self.instruments_endpoint = f'{trading_endpoint}/{self.INSTRUMENTS_ENDPOINT}'
+        
+        # Use data endpoint for quotes
+        self.pricing_endpoint = f'{data_endpoint}/{self.PRICING_ENDPOINT}'
+        
+        instruments_data = self.get_instruments()
+        super().__init__(instruments_data, self.NAME, api_key)
+        self.trading_endpoint = trading_endpoint  # Store for place_order compatibility
+    
+    def get_instruments(self):
+        response = requests.get(self.instruments_endpoint, headers=self.HEADERS)
+        response.raise_for_status()
+        data = response.json()
+        instruments = [
+            {
+                'symbol': i['symbol'],
+                'tickSize': 0.01,  # Alpaca typically supports decimal precision
+                'lotSize': 1       # Alpaca uses whole shares
+            }
+            for i in data if i['tradable']
+        ]
+        return instruments
 
-	def mark_price(self, symbol):
-		try:
-			url = self.pricing_endpoint.format(symbol=symbol)
-			logger.debug(f"Fetching quote from: {url}")
-			response = requests.get(url, headers=self.HEADERS)
-			response.raise_for_status()
-			pricing_data = response.json()
-			if 'quote' in pricing_data and 'ap' in pricing_data['quote']:
-				return float(pricing_data['quote']['ap'])
-			else:
-				print(f"Unexpected response format for symbol {symbol}: {pricing_data}")
-				return None
-		except requests.exceptions.HTTPError as e:
-			print(f"HTTP error occurred: {e}")
-			print(f"Response content: {response.content}")
-			return None
-		except Exception as e:
-			print(f"An error occurred: {e}")
-			return None
+    def mark_price(self, symbol):
+        try:
+            url = self.pricing_endpoint.format(symbol=symbol)
+            logger.debug(f"Fetching quote from: {url}")
+            response = requests.get(url, headers=self.HEADERS)
+            response.raise_for_status()
+            pricing_data = response.json()
+            if 'quote' in pricing_data and 'ap' in pricing_data['quote']:
+                return float(pricing_data['quote']['ap'])  # Ask price as mark price
+            else:
+                logger.warning(f"Unexpected response format for symbol {symbol}: {pricing_data}")
+                return None
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error occurred: {e} - Response content: {response.content}")
+            return None
+        except Exception as e:
+            logger.error(f"An error occurred: {e}")
+            return None
 
-	def place_order(self, symbol, side, quantity, order_type='market'):
-		url = f'{self.trading_endpoint}/v2/orders'
-		order_data = {
-			"symbol": symbol,
-			"qty": quantity,
-			"side": side,
-			"type": order_type,
-			"time_in_force": "gtc"
-		}
-		response = requests.post(url, json=order_data, headers=self.HEADERS)
-		response.raise_for_status()
-		return response.json()
+    def place_order(self, symbol, side, quantity, order_type='market'):
+        url = f'{self.trading_endpoint}/v2/orders'
+        order_data = {
+            "symbol": symbol,
+            "qty": quantity,
+            "side": side,
+            "type": order_type,
+            "time_in_force": "gtc"
+        }
+        response = requests.post(url, json=order_data, headers=self.HEADERS)
+        response.raise_for_status()
+        return response.json()
+
+    async def _stream_prices(self, symbols: List[str] = None):
+        """
+        Streams live prices from Alpaca's WebSocket API, calling registered callbacks with price updates.
+        :param symbols: List of symbols to subscribe to (e.g., ["AAPL", "TSLA"]). Defaults to all instruments.
+        """
+        if symbols is None:
+            symbols = [i['symbol'] for i in self.instruments]  # Default to all tradable symbols
+
+        async with websockets.connect(self.stream_url) as websocket:
+            # Authenticate
+            auth_message = {
+                "action": "auth",
+                "key": self.api_key,
+				"secret": self.secret_key
+            }
+            await websocket.send(json.dumps(auth_message))
+
+            # Keep reading until authentication is explicitly confirmed
+            authenticated = False
+            while not authenticated:
+                auth_response = await websocket.recv()
+                auth_data = json.loads(auth_response)
+
+                for msg in auth_data:
+                    if msg.get("T") == "success":
+                        if msg.get("msg") == "authenticated":
+                            logger.info("Authenticated successfully.")
+                            authenticated = True
+                        elif msg.get("msg") == "connected":
+                            logger.debug("Connection established, awaiting authentication confirmation...")
+                        elif msg.get("T") == "error":
+                            logger.error(f"Authentication error: {msg}")
+                            return
+            # Subscribe after authentication succeeds
+            subscribe_message = {
+                "action": "subscribe",
+                "quotes": symbols
+            }
+            await websocket.send(json.dumps(subscribe_message))
+
+            subscription_response = await websocket.recv()
+            logger.debug(f"Subscription response: {subscription_response}")
+
+            # Stream price updates
+            while True:
+                try:
+                    message = await websocket.recv()
+                    data = json.loads(message)
+                    for msg in data:
+                        if msg.get("T") == "q":  # Quote message
+                            price_update = {
+                                "symbol": msg["S"],
+                                "bid": float(msg["bp"]),  # Bid price
+                                "ask": float(msg["ap"])   # Ask price
+                            }
+                            for callback in self.callbacks:
+                                callback(price_update)
+                        elif msg.get("T") == "error":
+                            logger.error(f"Stream error: {msg}")
+                            break
+                except websockets.ConnectionClosed as e:
+                    logger.info(f"WebSocket connection closed: {e}")
+                    break
+                except Exception as e:
+                    logger.error(f"Error processing message: {e}")
+                    break
+
+    async def start_stream(self, symbols: List[str] = None):
+        """Start the WebSocket streaming for the specified symbols."""
+        await self._stream_prices(symbols)
