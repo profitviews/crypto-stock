@@ -30,6 +30,10 @@ if not ALPACA_PAPER_API_KEY or not ALPACA_PAPER_API_SECRET:
 ALPACA_DATA_ENDPOINT = 'https://data.alpaca.markets'
 ALPACA_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex'
 
+# Define callback function outside main()
+def handle_price_update(price_data):
+    logger.info(f"Received price update: {price_data}")
+
 async def main():
     try:
         logger.info("Initializing Alpaca venue")
@@ -53,9 +57,8 @@ async def main():
             logger.error(f"Failed to fetch instruments: {e}")
             return
 
-        @alpaca_venue.callback
-        def handle_price_update(price_data):
-            logger.info(f"Received price update: {price_data}")
+        # Register the callback with the venue instance
+        alpaca_venue.add_callback(handle_price_update)
 
         logger.info(f"Starting WebSocket stream for {contract}")
         await alpaca_venue.start_stream([contract])
