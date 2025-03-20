@@ -6,9 +6,52 @@ import asyncio
 import time
 from my.venues import BitMEX, Alpaca
 from dotenv import load_dotenv
+import xml.etree.ElementTree as ET
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+import io
+import csv
 
 load_dotenv()
 
+def get_ibit_btc_holdings_and_shares_outstanding():
+	headers = {
+		'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+	}
+	product_url = "https://www.ishares.com/us/products/333011/ishares-bitcoin-trust"
+	response = requests.get(product_url, headers=headers)	
+	
+	soup = BeautifulSoup(response.text, 'html.parser')
+	holdings_link = None
+
+	# Look for the specific link by class or text
+	for a in soup.find_all('a', href=True):
+		if 'icon-xls-export' in a.get('class', []) or 'detailed holdings and analytics' in a.text.lower():
+			holdings_link = a['href']
+			break
+	
+	if not holdings_link.startswith('http'):
+		holdings_link = "https://www.ishares.com" + holdings_link
+		
+	file_response = requests.get(holdings_link, headers=headers)
+	
+	preamble = file_response.text.splitlines()[:8]
+	shares_outstanding = None
+	for line in csv.reader(preamble):
+		if line and "Shares Outstanding" in line[0]:
+			shares_outstanding = line[1].strip('"')
+			break
+			
+	df = pd.read_csv(io.StringIO(file_response.text), skiprows=9)
+
+	# Extract BTC Held from Quantity column
+	btc_row = df[df['Ticker'] == 'BTC']
+	if not btc_row.empty:
+		btc_held = btc_row['Quantity'].values[0]
+		print(f"BTC Held: {btc_held}")
+		
+	return [float(btc_held.replace(",","")), int(float(shares_outstanding.replace(",","")))]
 
 def calculate_implied_btc_price(share_price, total_btc_held, total_shares_outstanding):
     """
@@ -38,6 +81,7 @@ class Trading(Link):
 	ALPACA_PAPER_API_SECRET=os.getenv('ALPACA_PAPER_API_SECRET')
 	ALPACA_DATA_ENDPOINT = 'https://data.alpaca.markets'
 	ALPACA_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex'
+	ALPHA_VANTAGE_API_KEY = os.getenv('ALPHA_VANTAGE_API_KEY')
 
 	def __init__(self):
         self.running = False
@@ -131,13 +175,19 @@ class Trading(Link):
     def quote_update(self, src, sym, data): pass
     def trade_update(self, src, sym, data): pass
 
-    @http.route
+	@http.route
+	def get_ibit_btc(self, data):
+		return get_ibit_btc_holdings()
+
+	@http.route
+	def get_ibit_shares(self, data):
+		return get_ibit_btc_holdings_and_shares_outstanding()
+
+	@http.route
     def get_prices(self, data):
 
-		# Example values based on February 26, 2025 estimate
 		ibit_share_price = self.stock_venue.mark_price(data['stock'])  # IBIT share price in USD
-		total_btc_held = 587698  # Total Bitcoin held by IBIT (as of Feb 20, 2025)
-		total_shares_outstanding = 1034000000  # Total shares outstanding (1.034 billion, Feb 20, 2025)
+		total_shares_outstanding, total_btc_held = get_ibit_btc_holdings_and_shares_outstanding()  # Total Bitcoin held by IBIT
 
 		# Calculate the implied Bitcoin price
 		implied_price = calculate_implied_btc_price(ibit_share_price, total_btc_held, total_shares_outstanding)
