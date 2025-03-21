@@ -1,69 +1,67 @@
 from profitview import Link, logger, http
 import os
-import json
-import math
 import asyncio
-import time
+import threading
+import requests
+import io
+import csv
 from my.venues import BitMEX, Alpaca
 from dotenv import load_dotenv
 import xml.etree.ElementTree as ET
 import pandas as pd
-import requests
 from bs4 import BeautifulSoup
-import io
-import csv
 
 load_dotenv()
 
-def get_ibit_btc_holdings_and_shares_outstanding():
+def get_ishares_data(product_url):
+	"""
+	Scrape iShares site for required product information: BTC held and Shares Outstanding
+	"""
+
+	base_url = 'https://www.ishares.com'
+	products = '/us/products'
+	
 	headers = {
 		'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 	}
-	product_url = "https://www.ishares.com/us/products/333011/ishares-bitcoin-trust"
-	response = requests.get(product_url, headers=headers)	
+	response = requests.get(base_url + products + product_url, headers=headers)
 	
 	soup = BeautifulSoup(response.text, 'html.parser')
-	holdings_link = None
+	holdings_path = ""
 
-	# Look for the specific link by class or text
 	for a in soup.find_all('a', href=True):
-		if 'icon-xls-export' in a.get('class', []) or 'detailed holdings and analytics' in a.text.lower():
-			holdings_link = a['href']
+		if 'detailed holdings and analytics' in a.text.lower():
+			holdings_path = a['href']
 			break
 	
-	if not holdings_link.startswith('http'):
-		holdings_link = "https://www.ishares.com" + holdings_link
-		
-	file_response = requests.get(holdings_link, headers=headers)
+	file_response = requests.get(base_url + holdings_path, headers=headers)
 	
-	preamble = file_response.text.splitlines()[:8]
-	shares_outstanding = None
+	# The CSV file is in two sections - the "preamble" and main data
+	lines_in_preamble = 8
+	
+	preamble = file_response.text.splitlines()[:lines_in_preamble]
+	shares_outstanding_string = ""
 	for line in csv.reader(preamble):
 		if line and "Shares Outstanding" in line[0]:
-			shares_outstanding = line[1].strip('"')
+			shares_outstanding_string = line[1].strip('"')
 			break
-			
-	df = pd.read_csv(io.StringIO(file_response.text), skiprows=9)
+	
+	shares_outstanding = int(float(shares_outstanding_string.replace(",","")))
+	
+	df = pd.read_csv(io.StringIO(file_response.text), skiprows=lines_in_preamble + 1)
 
 	# Extract BTC Held from Quantity column
 	btc_row = df[df['Ticker'] == 'BTC']
+	btc_held = 0.0
 	if not btc_row.empty:
-		btc_held = btc_row['Quantity'].values[0]
-		print(f"BTC Held: {btc_held}")
+		btc_held_string = btc_row['Quantity'].values[0]
+		btc_held = float(btc_held_string.replace(",",""))
 		
-	return [float(btc_held.replace(",","")), int(float(shares_outstanding.replace(",","")))]
+	return [btc_held, shares_outstanding]
 
 def calculate_implied_btc_price(share_price, total_btc_held, total_shares_outstanding):
     """
     Calculate the implied Bitcoin price from IBIT share price.
-    
-    Args:
-        share_price (float): Current IBIT share price in USD
-        total_btc_held (float): Total Bitcoin held by the IBIT trust
-        total_shares_outstanding (float): Total number of IBIT shares outstanding
-    
-    Returns:
-        float: Implied Bitcoin price in USD
     """
     # Calculate the Bitcoin per Share Ratio
     btc_per_share_ratio = total_btc_held / total_shares_outstanding
@@ -81,7 +79,8 @@ class Trading(Link):
 	ALPACA_PAPER_API_SECRET=os.getenv('ALPACA_PAPER_API_SECRET')
 	ALPACA_DATA_ENDPOINT = 'https://data.alpaca.markets'
 	ALPACA_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex'
-	ALPHA_VANTAGE_API_KEY = os.getenv('ALPHA_VANTAGE_API_KEY')
+	PRODUCT_URL = '/333011/ishares-bitcoin-trust'
+	PRODUCT_SYMBOL = 'IBIT'
 
 	def __init__(self):
         self.running = False
@@ -94,7 +93,7 @@ class Trading(Link):
             self.venue_setup()
             self.venues_ready = True
             # Register callback after venues are set up
-            self.stock_venue.add_callback(self.on_price_update)
+            self.stock_venue.add_callback(self.on_ibit_price_update)
             # Start stream in background after initialization
             self.schedule_stream()
             logger.info("Initialization complete; venues ready")
@@ -125,10 +124,9 @@ class Trading(Link):
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 logger.debug("Event loop running; scheduling stream task")
-                loop.create_task(self.start_stream(symbols=['IBIT']))
+                loop.create_task(self.start_stream(symbols=[self.PRODUCT_URL]))
             else:
                 logger.warning("Event loop not running; scheduling stream in new thread")
-                import threading
                 threading.Thread(target=lambda: asyncio.run(self.start_stream(symbols=['IBIT'])), daemon=True).start()
         except Exception as e:
             logger.error(f"Failed to schedule stream: {e}")
@@ -137,8 +135,10 @@ class Trading(Link):
         """Synchronous start method; logs startup."""
         logger.info("Starting algo")
         if not self.venues_ready:
-            logger.warning("Venues not ready yet; stream scheduled in __init__")
-        # Stream should already be scheduled by __init__
+            logger.error("Venues not ready yet; stream scheduled in __init__")
+			raise Exception("Venues not ready in 'on_start()'")
+		
+		
 
     async def start_stream(self, symbols=["IBIT"]):
         """Asynchronous method to start the WebSocket stream."""
@@ -155,7 +155,7 @@ class Trading(Link):
             self.running = False
             logger.info("Stream stopped")
 
-    def on_price_update(self, price_data):
+    def on_ibit_price_update(self, price_data):
         """Handle WebSocket price updates."""
         logger.info(f"Price update received: {price_data}")
         bid = price_data["bid"]
@@ -181,13 +181,13 @@ class Trading(Link):
 
 	@http.route
 	def get_ibit_shares(self, data):
-		return get_ibit_btc_holdings_and_shares_outstanding()
+		return get_ishares_data(self.PRODUCT_URL)
 
 	@http.route
     def get_prices(self, data):
 
 		ibit_share_price = self.stock_venue.mark_price(data['stock'])  # IBIT share price in USD
-		total_shares_outstanding, total_btc_held = get_ibit_btc_holdings_and_shares_outstanding()  # Total Bitcoin held by IBIT
+		total_btc_held, total_shares_outstanding = get_ishares_data(self.PRODUCT_URL)  # Total Bitcoin held by IBIT
 
 		# Calculate the implied Bitcoin price
 		implied_price = calculate_implied_btc_price(ibit_share_price, total_btc_held, total_shares_outstanding)
