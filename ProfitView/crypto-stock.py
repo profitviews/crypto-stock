@@ -94,8 +94,9 @@ class Trading(Link):
             self.venues_ready = True
             # Register callback after venues are set up
             self.stock_venue.add_callback(self.on_ibit_price_update)
+			self.ibit_btc, self.ibit_shares = get_ishares_data(self.PRODUCT_URL)
             # Start stream in background after initialization
-            self.schedule_stream()
+            self.schedule_stream(self.PRODUCT_SYMBOL)
             logger.info("Initialization complete; venues ready")
         except Exception as e:
             logger.error(f"Exception in __init__ during venue setup: {e}")
@@ -115,19 +116,14 @@ class Trading(Link):
             self.crypto_venue = None
             raise
 
-    def schedule_stream(self):
+    def schedule_stream(self, symbol):
         """Schedule the WebSocket stream to start in the background."""
         if not self.venues_ready or not self.stock_venue:
             logger.warning("Venues not ready; cannot schedule stream")
             return
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                logger.debug("Event loop running; scheduling stream task")
-                loop.create_task(self.start_stream(symbols=[self.PRODUCT_URL]))
-            else:
-                logger.warning("Event loop not running; scheduling stream in new thread")
-                threading.Thread(target=lambda: asyncio.run(self.start_stream(symbols=['IBIT'])), daemon=True).start()
+			logger.warning("Scheduling stream in new thread")
+			threading.Thread(target=lambda: asyncio.run(self.start_stream(symbols=[symbol])), daemon=True).start()
         except Exception as e:
             logger.error(f"Failed to schedule stream: {e}")
 
@@ -136,9 +132,6 @@ class Trading(Link):
         logger.info("Starting algo")
         if not self.venues_ready:
             logger.error("Venues not ready yet; stream scheduled in __init__")
-			raise Exception("Venues not ready in 'on_start()'")
-		
-		
 
     async def start_stream(self, symbols=["IBIT"]):
         """Asynchronous method to start the WebSocket stream."""
@@ -187,14 +180,13 @@ class Trading(Link):
     def get_prices(self, data):
 
 		ibit_share_price = self.stock_venue.mark_price(data['stock'])  # IBIT share price in USD
-		total_btc_held, total_shares_outstanding = get_ishares_data(self.PRODUCT_URL)  # Total Bitcoin held by IBIT
 
 		# Calculate the implied Bitcoin price
-		implied_price = calculate_implied_btc_price(ibit_share_price, total_btc_held, total_shares_outstanding)
+		implied_price = calculate_implied_btc_price(ibit_share_price, self.ibit_btc, self.ibit_shares)
 
 		# Print the result
 		logger.info(f"IBIT Share Price: ${ibit_share_price:.2f}")
-		logger.info(f"Bitcoin per Share Ratio: {total_btc_held / total_shares_outstanding:.7f} BTC/share")
+		logger.info(f"Bitcoin per Share Ratio: {self.ibit_btc / self.ibit_shares:.7f} BTC/share")
 		logger.info(f"Implied Bitcoin Price: ${implied_price:,.2f} USD/BTC")
 
 		# Optional: Compare with a known BTC price for sanity check (e.g., Feb 25 estimate)
