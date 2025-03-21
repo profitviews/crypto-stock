@@ -5,6 +5,7 @@ import threading
 import requests
 import io
 import csv
+import copy
 from my.venues import BitMEX, Alpaca
 from dotenv import load_dotenv
 import xml.etree.ElementTree as ET
@@ -95,7 +96,8 @@ class Trading(Link):
             # Register callback after venues are set up
             self.stock_venue.add_callback(self.on_ibit_price_update)
 			self.ibit_btc, self.ibit_shares = get_ishares_data(self.PRODUCT_URL)
-			self.ibit_quote = {}
+			self.ibit_quote = self.previous_ibit_quote = {}
+			self.ibit_quote_changed = False
             # Start stream in background after initialization
             self.schedule_stream(self.PRODUCT_SYMBOL)
             logger.info("Initialization complete; venues ready")
@@ -151,23 +153,25 @@ class Trading(Link):
 
     def on_ibit_price_update(self, price_data):
         """Handle WebSocket price updates."""
-        logger.info(f"Price update received: {price_data}")
         self.ibit_quote = { 'bid': price_data["bid"], 'ask': price_data["ask"] }
-		
-        logger.info(f"IBIT: {self.ibit_quote}")
+		if self.ibit_quote != self.previous_ibit_quote:
+			logger.info(f"IBIT quote changed. Previous: {self.previous_ibit_quote}; current: {self.ibit_quote}")
+			self.ibit_quote_changed = True
+			self.previous_ibit_quote = copy.deepcopy(self.ibit_quote)
 		
     def quote_update(self, src, sym, data):
-		bid = data['bid'][0]
-		ibit_bid = self.ibit_quote.get('bid')
-		if ibit_bid: 
-			implied_ibit_bid = calculate_implied_btc_price(ibit_bid, self.ibit_btc, self.ibit_shares)
-			logger.info(f"Bid difference (Premium/Discount): ${(implied_ibit_bid - bid):,.2f} USD/BTC")
+		if self.ibit_quote_changed:
+			bid = data['bid'][0]
+			if ibit_bid := self.ibit_quote.get('bid'): 
+				implied_ibit_bid = calculate_implied_btc_price(ibit_bid, self.ibit_btc, self.ibit_shares)
+				logger.info(f"Bid difference (Premium/Discount): ${(implied_ibit_bid - bid):,.2f} USD/BTC")
 
-		ask = data['ask'][0]
-		ibit_ask = self.ibit_quote.get('ask')
-		if ibit_ask:
-			implied_ibit_ask = calculate_implied_btc_price(ibit_ask, self.ibit_btc, self.ibit_shares)
-			logger.info(f"Ask difference (Premium/Discount): ${(implied_ibit_ask - ask):,.2f} USD/BTC")
+			ask = data['ask'][0]
+			if ibit_ask := self.ibit_quote.get('ask'):
+				implied_ibit_ask = calculate_implied_btc_price(ibit_ask, self.ibit_btc, self.ibit_shares)
+				logger.info(f"Ask difference (Premium/Discount): ${(implied_ibit_ask - ask):,.2f} USD/BTC")
+			
+			self.ibit_quote_changed = False
 
 	@http.route
     def get_start_stream(self, data):
