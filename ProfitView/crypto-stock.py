@@ -155,7 +155,6 @@ class Trading(Link):
         """Handle WebSocket price updates."""
         self.ibit_quote = { 'bid': price_data["bid"], 'ask': price_data["ask"] }
 		if self.ibit_quote != self.previous_ibit_quote:
-			logger.info(f"IBIT quote changed. Previous: {self.previous_ibit_quote}; current: {self.ibit_quote}")
 			self.ibit_quote_changed = True
 			self.previous_ibit_quote = copy.deepcopy(self.ibit_quote)
 		
@@ -164,13 +163,12 @@ class Trading(Link):
 			bid = data['bid'][0]
 			if ibit_bid := self.ibit_quote.get('bid'): 
 				implied_ibit_bid = calculate_implied_btc_price(ibit_bid, self.ibit_btc, self.ibit_shares)
-				logger.info(f"Bid difference (Premium/Discount): ${(implied_ibit_bid - bid):,.2f} USD/BTC")
 
 			ask = data['ask'][0]
 			if ibit_ask := self.ibit_quote.get('ask'):
 				implied_ibit_ask = calculate_implied_btc_price(ibit_ask, self.ibit_btc, self.ibit_shares)
-				logger.info(f"Ask difference (Premium/Discount): ${(implied_ibit_ask - ask):,.2f} USD/BTC")
-			
+
+			logger.info(f"Differences (Premium/Discount) - Ask: ${(implied_ibit_ask - ask):,.2f} USD; Bid: ${(implied_ibit_bid - bid):,.2f}")
 			self.ibit_quote_changed = False
 
 	@http.route
