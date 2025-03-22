@@ -82,8 +82,6 @@ def implied_btc(share_price, total_btc_held, total_shares_outstanding):
     return share_price * total_shares_outstanding / total_btc_held
 ```
 
-Full source code for this arbitrage strategy can be found in our [public GitHub repository](https://github.com/profitviews/crypto-stock).
-
 ## Executing the Arbitrage
 
 ProfitView's powerful signaling framework allows the strategy to send signals directly to the trading Bot when price deviations exceed a certain statistical threshold (e.g., 1 standard deviation from the mean). Here’s a simplified view:
