@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 # Enable detailed HTTP logging for debugging:
 HTTPConnection.debuglevel = 1
 logging.basicConfig()
-logging.getLogger().setLevel(logging.DEBUG)
+logging.getLogger().setLevel(logging.INFO)
 requests_log = logging.getLogger("requests.packages.urllib3")
-requests_log.setLevel(logging.DEBUG)
+requests_log.setLevel(logging.INFO)
 requests_log.propagate = True
 
 class Venue:
@@ -212,10 +212,11 @@ class BitMEX(Venue):
 		
 		return all_instruments_data
 
-	def __init__(self, trading, rate_limit_delay=RATE_LIMIT_DELAY):
+	def __init__(self, trading, rate_limit_delay=RATE_LIMIT_DELAY, is_signal=False):
 		self.trading = trading
 		self.rate_limit_delay = rate_limit_delay
-		instruments_data = self._fetch_instruments()
+		self.is_signal = is_signal
+		instruments_data = self._fetch_instruments() if not is_signal else []
 		super().__init__(self.__type_parameters(instruments_data), self.NAME)
 
 	def get_instruments(self):
@@ -232,6 +233,9 @@ class BitMEX(Venue):
 		
 	def get_btc_mark_price(self):
 		"""Get the XBT mark price from the BitMEX API."""
+		if self.is_signal:
+			raise NotImplementedError("Signals interface does not support getting the BTC mark price")
+		
 		xbtparams = self.trading.call_endpoint(
 			self.NAME,
 			self.INSTRUMENT_ENDPOINT,
@@ -260,6 +264,9 @@ class BitMEX(Venue):
 		return price
 
 	def standard_size(self, symbol, dollar_amount):
+		if self.is_signal:
+			raise NotImplementedError("Signals interface does not support getting the standard size")
+		
 		d = self._instrument(symbol)
 		mark_price = d['markPrice']
 
