@@ -155,24 +155,6 @@ class Trading(Link):
 		if self.ibit_quote != self.previous_ibit_quote:
 			self.ibit_quote_changed = True
 			self.previous_ibit_quote = copy.deepcopy(self.ibit_quote)
-			self.differences['bid'].append(self.ibit_quote['bid'])
-			self.differences['ask'].append(self.ibit_quote['ask'])
-			if len(self.differences['bid']) > self.DIFFERENCES_SIZE: 
-				self.differences['bid'] = self.differences['bid'][1:]
-				self.differences['ask'] = self.differences['ask'][1:]
-				
-				bid_diffs = np.array(self.differences['bid'])
-				ask_diffs = np.array(self.differences['ask'])
-				
-				bid_mean = ta.SMA(bid_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
-				ask_mean = ta.SMA(ask_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
-				bid_std = ta.STDDEV(bid_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
-				ask_std = ta.STDDEV(ask_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
-
-				logger.info(f"{bid_mean=}, {ask_mean=}, {bid_std=}, {ask_std=}")
-
-				# **TODO** Check whether we're at an extreme either way - if so buy/sell XBTUSD
-							
 		
     def quote_update(self, src, sym, data):
 		if not self.ibit_quote_changed: return
@@ -184,6 +166,30 @@ class Trading(Link):
 		ask = data['ask'][0]
 		if ibit_ask := self.ibit_quote.get('ask'):
 			implied_ibit_ask = implied_btc(ibit_ask, self.ibit_btc, self.ibit_shares)
+
+		bid_difference = bid - implied_ibit_bid
+		self.differences['bid'].append(bid_difference)
+		ask_difference = ask - implied_ibit_ask
+		self.differences['ask'].append(ask_difference)
+		if len(self.differences['bid']) > self.DIFFERENCES_SIZE: 
+			self.differences['bid'] = self.differences['bid'][1:]
+			self.differences['ask'] = self.differences['ask'][1:]
+
+			bid_diffs = np.array(self.differences['bid'])
+			ask_diffs = np.array(self.differences['ask'])
+
+			bid_mean = ta.SMA(bid_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
+			ask_mean = ta.SMA(ask_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
+			bid_std = ta.STDDEV(bid_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
+			ask_std = ta.STDDEV(ask_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
+
+			logger.info(f"{bid_mean=}, {ask_mean=}, {bid_std=}, {ask_std=}")
+
+			if bid_difference - bid_mean > bid_std: 
+				logger.info("BTC Perp is high")
+				
+			if ask_mean - ask_difference < ask_std: 
+				logger.info("BTC Perp is low")
 
 		logger.info(f"Differences (Premium/Discount) - Ask: ${(implied_ibit_ask - ask):,.2f} USD; Bid: ${(implied_ibit_bid - bid):,.2f}")
 		self.ibit_quote_changed = False
