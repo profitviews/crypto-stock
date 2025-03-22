@@ -12,7 +12,7 @@ We provide **all the code** and link you to a Bot that you can **run right now**
 
 The key concept behind this arbitrage strategy is comparing the implied price of Bitcoin from IBIT shares against the real-time Bitcoin perpetual futures market on BitMEX. When these two prices diverge significantly, an arbitrage opportunity arises.
 
-ProfitView's Python-based algorithmic trading interface provides the flexibility to develop complex automated strategies. Below, we'll explore the technical solution we've created for monitoring and acting upon these price differentials.
+ProfitView's Python-based algorithmic trading interface provides the flexibility to develop complex automated strategies. Below, we'll explore the technical solution we've created for monitoring and acting upon these price differentials.  The code below is in this repo at [`ProfitView/crypto-stock-signal.py`](/ProfitView/crypto-stock-signal.py). It uses library `venues` which is in [`my/venues.py`](/my/venues.py).  Make sure you installe the [requirements](/requirements.txt).
 
 ## Technical Setup with ProfitView
 
