@@ -187,11 +187,11 @@ class Signals(Link):
 
 			if bid_difference - bid_mean > bid_std: 
 				logger.info("BTC Perp is high")
-				self.signal('bitmex', 'XBTUSD', size=1.0)
-				
-			if ask_mean - ask_difference < ask_std: 
+				self.signal('bitmex', 'XBTUSD', size=1.0)	
+			elif ask_mean - ask_difference < ask_std: 
 				logger.info("BTC Perp is low")
 				self.signal('bitmex', 'XBTUSD', size=-1.0)
+			else: self.signal('bitmex', 'XBTUSD', size=None)
 
 		logger.info(f"Differences (Premium/Discount) - Ask: ${(implied_ibit_ask - ask):,.2f} USD; Bid: ${(implied_ibit_bid - bid):,.2f}")
 		self.ibit_quote_changed = False
