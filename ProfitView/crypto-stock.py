@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 import xml.etree.ElementTree as ET
 import pandas as pd
 from bs4 import BeautifulSoup
+import talib as ta
+import numpy as np
 
 load_dotenv()
 
@@ -60,17 +62,8 @@ def get_ishares_data(product_url):
 		
 	return [btc_held, shares_outstanding]
 
-def calculate_implied_btc_price(share_price, total_btc_held, total_shares_outstanding):
-    """
-    Calculate the implied Bitcoin price from IBIT share price.
-    """
-    # Calculate the Bitcoin per Share Ratio
-    btc_per_share_ratio = total_btc_held / total_shares_outstanding
-    
-    # Calculate the implied Bitcoin price
-    implied_btc_price = share_price / btc_per_share_ratio
-    
-    return implied_btc_price
+def implied_btc(share_price, total_btc_held, total_shares_outstanding):
+    return share_price*total_shares_outstanding / total_btc_held
 
 
 class Trading(Link):
@@ -80,8 +73,11 @@ class Trading(Link):
 	ALPACA_PAPER_API_SECRET=os.getenv('ALPACA_PAPER_API_SECRET')
 	ALPACA_DATA_ENDPOINT = 'https://data.alpaca.markets'
 	ALPACA_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex'
+	
 	PRODUCT_URL = '/333011/ishares-bitcoin-trust'
 	PRODUCT_SYMBOL = 'IBIT'
+	
+	DIFFERENCES_SIZE = 50
 
 	def __init__(self):
         self.running = False
@@ -90,6 +86,7 @@ class Trading(Link):
         self.venues_ready = False
         
         try:
+			self.ibit_quote_changed = False
             super().__init__()
             self.venue_setup()
             self.venues_ready = True
@@ -98,6 +95,7 @@ class Trading(Link):
 			self.ibit_btc, self.ibit_shares = get_ishares_data(self.PRODUCT_URL)
 			self.ibit_quote = self.previous_ibit_quote = {}
 			self.ibit_quote_changed = False
+			self.differences = {'bid': [], 'ask': []}
             # Start stream in background after initialization
             self.schedule_stream(self.PRODUCT_SYMBOL)
             logger.info("Initialization complete; venues ready")
@@ -157,19 +155,38 @@ class Trading(Link):
 		if self.ibit_quote != self.previous_ibit_quote:
 			self.ibit_quote_changed = True
 			self.previous_ibit_quote = copy.deepcopy(self.ibit_quote)
+			self.differences['bid'].append(self.ibit_quote['bid'])
+			self.differences['ask'].append(self.ibit_quote['ask'])
+			if len(self.differences['bid']) > self.DIFFERENCES_SIZE: 
+				self.differences['bid'] = self.differences['bid'][1:]
+				self.differences['ask'] = self.differences['ask'][1:]
+				
+				bid_diffs = np.array(self.differences['bid'])
+				ask_diffs = np.array(self.differences['ask'])
+				
+				bid_mean = ta.SMA(bid_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
+				ask_mean = ta.SMA(ask_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
+				bid_std = ta.STDDEV(bid_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
+				ask_std = ta.STDDEV(ask_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
+
+				logger.info(f"{bid_mean=}, {ask_mean=}, {bid_std=}, {ask_std=}")
+
+				# **TODO** Check whether we're at an extreme either way - if so buy/sell XBTUSD
+							
 		
     def quote_update(self, src, sym, data):
-		if self.ibit_quote_changed:
-			bid = data['bid'][0]
-			if ibit_bid := self.ibit_quote.get('bid'): 
-				implied_ibit_bid = calculate_implied_btc_price(ibit_bid, self.ibit_btc, self.ibit_shares)
+		if not self.ibit_quote_changed: return
+		
+		bid = data['bid'][0]
+		if ibit_bid := self.ibit_quote.get('bid'): 
+			implied_ibit_bid = implied_btc(ibit_bid, self.ibit_btc, self.ibit_shares)
+		
+		ask = data['ask'][0]
+		if ibit_ask := self.ibit_quote.get('ask'):
+			implied_ibit_ask = implied_btc(ibit_ask, self.ibit_btc, self.ibit_shares)
 
-			ask = data['ask'][0]
-			if ibit_ask := self.ibit_quote.get('ask'):
-				implied_ibit_ask = calculate_implied_btc_price(ibit_ask, self.ibit_btc, self.ibit_shares)
-
-			logger.info(f"Differences (Premium/Discount) - Ask: ${(implied_ibit_ask - ask):,.2f} USD; Bid: ${(implied_ibit_bid - bid):,.2f}")
-			self.ibit_quote_changed = False
+		logger.info(f"Differences (Premium/Discount) - Ask: ${(implied_ibit_ask - ask):,.2f} USD; Bid: ${(implied_ibit_bid - bid):,.2f}")
+		self.ibit_quote_changed = False
 
 	@http.route
     def get_start_stream(self, data):
@@ -198,7 +215,7 @@ class Trading(Link):
 		current_btc_price = self.crypto_venue.mark_price(data['crypto'])  # Approximate BTC price from X post on Feb 25
 
 		# Calculate the implied Bitcoin price
-		implied_price = calculate_implied_btc_price(ibit_share_price, self.ibit_btc, self.ibit_shares)
+		implied_price = implied_btc(ibit_share_price, self.ibit_btc, self.ibit_shares)
 
 		# Print the result
 		logger.info(f"IBIT Share Price: ${ibit_share_price:.2f}")
