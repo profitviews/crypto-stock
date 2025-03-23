@@ -12,6 +12,10 @@ We provide **all the code** and link you to a Bot that you can **run right now**
 
 The key concept behind this arbitrage strategy is comparing the implied price of Bitcoin from IBIT shares against the real-time Bitcoin perpetual futures market on BitMEX. When these two prices diverge significantly, an arbitrage opportunity arises.
 
+It's important to note that some differences between the IBIT implied price and perpetual futures are expected due to factors such as market liquidity, trading hours, and underlying market structures. While these nuances are interesting and relevant, we won't delve deeply into them in this particular blog.
+
+Further, we use prices from [IEX](https://www.iexexchange.io/) which are real-time, but represent only a small fraction of the market (it is available for free).
+
 ProfitView's Python-based algorithmic trading interface provides the flexibility to develop complex automated strategies. Below, we'll explore the technical solution we've created for monitoring and acting upon these price differentials.  The code below is in this repo at [`ProfitView/crypto-stock-signal.py`](/ProfitView/crypto-stock-signal.py). It uses library `venues` which is in [`my/venues.py`](/my/venues.py).  Make sure you installe the [requirements](/requirements.txt).
 
 ## Technical Setup with ProfitView
@@ -63,11 +67,42 @@ btc_held = float(btc_held_string.replace(",",""))
 
 ### 2. Real-Time Price Streaming
 
-Next, we establish a real-time stream of IBIT ETF quotes using Alpaca's WebSocket API integrated directly into ProfitView. This allows our Bot to constantly track price fluctuations:
-
+Next, we establish a real-time stream of IBIT ETF quotes using Alpaca's WebSocket API integrated directly into ProfitView. This showcases ProfitView’s flexibility by using asynchronous programming (`asyncio`), WebSockets, and to bring in a custom library (`venues`) to handle real-time data efficiently. We put the streaming logic together in `venues` and create a callback system to provide clients with a way to hook in their trading algo specifics.  All part of the ProfitView mantra of Make Traders Better™:
+```python
+def __init__(self, instruments, venue, api_key=None):
+    # ...
+		self.callbacks: List[Callable[[dict], None]] = []
+```
+Then the messy and venue specific websocket message handshaking and interpretation:
+```python
+message = await websocket.recv()
+data = json.loads(message)
+for msg in data:
+    if msg.get("T") == "q":  # Quote message
+        price_update = {
+            "symbol": msg["S"],
+            "bid": float(msg["bp"]),  # Bid price
+            "ask": float(msg["ap"])   # Ask price
+        }
+        for callback in self.callbacks:
+            callback(price_update)
+    elif msg.get("T") == "error":
+        logger.error(f"Stream error: {msg}")
+        break
+```
+In client code you just have
+```python
+self.stock_venue.add_callback(self.on_ibit_price_update)  # Whatever local method the client wishes
+```
+in the constructor and then
 ```python
 async def start_stream(self, symbols=["IBIT"]):
     await self.stock_venue.start_stream(symbols)
+```
+Then the client's code:
+```python
+def on_ibit_price_update(self, price_data):
+  # ... algo code here
 ```
 ProfitView is natively connected with BitMEX's data streams and uses the `quote_update()` method to get streamed Bitcoin perp prices.
 

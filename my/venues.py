@@ -487,6 +487,8 @@ class Alpaca(Venue):
         """
         Streams live prices from Alpaca's WebSocket API, calling registered callbacks with price updates.
         :param symbols: List of symbols to subscribe to (e.g., ["AAPL", "TSLA"]). Defaults to all instruments.
+
+		@todo:  Reconcile this with the Venue class. This local code should be cut down to separate commonalities and differences.
         """
         if symbols is None:
             symbols = [i['symbol'] for i in self.instruments]  # Default to all tradable symbols
