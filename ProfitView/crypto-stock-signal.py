@@ -195,17 +195,36 @@ class Signals(Link):
             bid_std = ta.STDDEV(bid_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
             ask_std = ta.STDDEV(ask_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
 
-            # Trading signals based on deviations from mean
-            if bid_difference > (bid_mean + bid_std):
-                logger.info("BTC Perp is trading at significant premium")
-                logger.info(f"{bid_mean=}, {bid_std=}, {bid_difference=}")
-                self.signal('bitmex', 'XBTUSD', size=-1.0)  # Sell futures when premium is high
-            elif ask_difference > (ask_mean + ask_std):
-                logger.info("BTC Perp is trading at significant discount")
-                logger.info(f"{ask_mean=}, {ask_std=}, {ask_difference=}")
-                self.signal('bitmex', 'XBTUSD', size=1.0)   # Buy futures when discount is high
+            # Calculate z-scores for current differences
+            bid_zscore = (bid_difference - bid_mean) / bid_std if bid_std > 0 else 0
+            ask_zscore = (ask_difference - ask_mean) / ask_std if ask_std > 0 else 0
+            
+            # More aggressive minimum z-score
+            MIN_ZSCORE = 0.5
+            
+            # Modified scaling function to be more aggressive at lower z-scores
+            def calculate_size(zscore):
+                if abs(zscore) < MIN_ZSCORE:
+                    return None
+                # Steeper scaling for smaller z-scores
+                return np.tanh((abs(zscore) - MIN_ZSCORE) * 1.5)
+
+            # Trading signals based on z-scores
+            if bid_zscore > MIN_ZSCORE:  # Premium
+                size = calculate_size(bid_zscore)
+                if size is not None:
+                    size = -size  # Negative for selling
+                    logger.info("BTC Perp is trading at premium")
+                    logger.info(f"{bid_mean=}, {bid_std=}, {bid_difference=}, {bid_zscore=}, {size=}")
+                    self.signal('bitmex', 'XBTUSD', size=size)
+            elif ask_zscore > MIN_ZSCORE:  # Discount
+                size = calculate_size(ask_zscore)
+                if size is not None:
+                    logger.info("BTC Perp is trading at discount")
+                    logger.info(f"{ask_mean=}, {ask_std=}, {ask_difference=}, {ask_zscore=}, {size=}")
+                    self.signal('bitmex', 'XBTUSD', size=size)
             else:
-                self.signal('bitmex', 'XBTUSD', size=None)  # No signal
+                self.signal('bitmex', 'XBTUSD', size=None)
 
             logger.info(f"Differences (Premium/Discount) - Ask: ${ask_difference:,.2f} USD; Bid: ${bid_difference:,.2f}")
             
