@@ -167,30 +167,38 @@ class Signals(Link):
 		if ibit_ask := self.ibit_quote.get('ask'):
 			implied_ibit_ask = implied_btc(ibit_ask, self.ibit_btc, self.ibit_shares)
 
-		bid_difference = bid - implied_ibit_bid
-		self.differences['bid'].append(bid_difference)
-		ask_difference = ask - implied_ibit_ask
-		self.differences['ask'].append(ask_difference)
+		if (bid_difference := bid - implied_ibit_bid) < 0: bid_difference = 0
+		self.differences['bid'].append(float(bid_difference))
+		if (ask_difference := implied_ibit_ask - ask) < 0: ask_difference = 0
+		self.differences['ask'].append(float(ask_difference))
+		
 		if len(self.differences['bid']) > self.DIFFERENCES_SIZE: 
 			self.differences['bid'] = self.differences['bid'][1:]
 			self.differences['ask'] = self.differences['ask'][1:]
 
-			bid_diffs = np.array(self.differences['bid'])
-			ask_diffs = np.array(self.differences['ask'])
+			bid_diffs = np.array(self.differences['bid'], dtype=np.float64)
+			ask_diffs = np.array(self.differences['ask'], dtype=np.float64)
 
 			bid_mean = ta.SMA(bid_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
 			ask_mean = ta.SMA(ask_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
 			bid_std = ta.STDDEV(bid_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
 			ask_std = ta.STDDEV(ask_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
 
-			logger.info(f"{bid_mean=}, {ask_mean=}, {bid_std=}, {ask_std=}")
+			upward_bid_difference = bid_difference if bid_difference > 0 else 0 
+			downward_ask_difference = -ask_difference if ask_difference < 0 else 0
+			
+			# logger.info(f"{bid_mean=}, {ask_mean=}, {bid_std=}, {ask_std=}")
+			# logger.info(f"{bid_difference=}, {upward_bid_difference=}")
+			# logger.info(f"{ask_difference=}, {downward_ask_difference=}")
 
-			if bid_difference - bid_mean > bid_std: 
+			if upward_bid_difference - bid_mean > bid_std:
 				logger.info("BTC Perp is high")
-				self.signal('bitmex', 'XBTUSD', size=1.0)	
-			elif ask_mean - ask_difference < ask_std: 
+				logger.info(f"{bid_mean=}, {bid_std=}, {bid_difference=}, {upward_bid_difference=}")
+				self.signal('bitmex', 'XBTUSD', size=-1.0)	# Sell - revert to mean
+			elif ask_mean - ask_difference < ask_std:  # @todo
 				logger.info("BTC Perp is low")
-				self.signal('bitmex', 'XBTUSD', size=-1.0)
+				logger.info(f"{ask_mean=}, {ask_std=}, {ask_difference=}, {downward_ask_difference=}")
+				self.signal('bitmex', 'XBTUSD', size=1.0)  # Buy - revert to mean
 			else: self.signal('bitmex', 'XBTUSD', size=None)
 
 		logger.info(f"Differences (Premium/Discount) - Ask: ${(implied_ibit_ask - ask):,.2f} USD; Bid: ${(implied_ibit_bid - bid):,.2f}")
