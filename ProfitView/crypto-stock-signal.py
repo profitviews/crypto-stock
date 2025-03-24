@@ -157,52 +157,59 @@ class Signals(Link):
 			self.previous_ibit_quote = copy.deepcopy(self.ibit_quote)
 		
     def quote_update(self, src, sym, data):
-		if not self.ibit_quote_changed: return
-		
-		bid = data['bid'][0]
-		if ibit_bid := self.ibit_quote.get('bid'): 
-			implied_ibit_bid = implied_btc(ibit_bid, self.ibit_btc, self.ibit_shares)
-		
-		ask = data['ask'][0]
-		if ibit_ask := self.ibit_quote.get('ask'):
-			implied_ibit_ask = implied_btc(ibit_ask, self.ibit_btc, self.ibit_shares)
+        if not self.ibit_quote_changed: 
+            return
+        
+        bid = data['bid'][0]
+        ask = data['ask'][0]
+        
+        # Get IBIT quotes with default handling
+        ibit_bid = self.ibit_quote.get('bid')
+        ibit_ask = self.ibit_quote.get('ask')
+        
+        if ibit_bid is None or ibit_ask is None:
+            return
+        
+        # Calculate implied prices
+        implied_ibit_bid = implied_btc(ibit_bid, self.ibit_btc, self.ibit_shares)
+        implied_ibit_ask = implied_btc(ibit_ask, self.ibit_btc, self.ibit_shares)
+        
+        # Calculate differences (premium/discount)
+        bid_difference = bid - implied_ibit_bid  # Positive means futures premium
+        ask_difference = implied_ibit_ask - ask  # Positive means futures discount
+        
+        # Store absolute differences for analysis
+        self.differences['bid'].append(float(abs(bid_difference)))
+        self.differences['ask'].append(float(abs(ask_difference)))
+        
+        if len(self.differences['bid']) > self.DIFFERENCES_SIZE: 
+            self.differences['bid'] = self.differences['bid'][1:]
+            self.differences['ask'] = self.differences['ask'][1:]
 
-		if (bid_difference := bid - implied_ibit_bid) < 0: bid_difference = 0
-		self.differences['bid'].append(float(bid_difference))
-		if (ask_difference := implied_ibit_ask - ask) < 0: ask_difference = 0
-		self.differences['ask'].append(float(ask_difference))
-		
-		if len(self.differences['bid']) > self.DIFFERENCES_SIZE: 
-			self.differences['bid'] = self.differences['bid'][1:]
-			self.differences['ask'] = self.differences['ask'][1:]
+            # Calculate statistics
+            bid_diffs = np.array(self.differences['bid'], dtype=np.float64)
+            ask_diffs = np.array(self.differences['ask'], dtype=np.float64)
 
-			bid_diffs = np.array(self.differences['bid'], dtype=np.float64)
-			ask_diffs = np.array(self.differences['ask'], dtype=np.float64)
+            bid_mean = ta.SMA(bid_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
+            ask_mean = ta.SMA(ask_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
+            bid_std = ta.STDDEV(bid_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
+            ask_std = ta.STDDEV(ask_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
 
-			bid_mean = ta.SMA(bid_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
-			ask_mean = ta.SMA(ask_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
-			bid_std = ta.STDDEV(bid_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
-			ask_std = ta.STDDEV(ask_diffs, timeperiod=self.DIFFERENCES_SIZE)[-1]
+            # Trading signals based on deviations from mean
+            if bid_difference > (bid_mean + bid_std):
+                logger.info("BTC Perp is trading at significant premium")
+                logger.info(f"{bid_mean=}, {bid_std=}, {bid_difference=}")
+                self.signal('bitmex', 'XBTUSD', size=-1.0)  # Sell futures when premium is high
+            elif ask_difference > (ask_mean + ask_std):
+                logger.info("BTC Perp is trading at significant discount")
+                logger.info(f"{ask_mean=}, {ask_std=}, {ask_difference=}")
+                self.signal('bitmex', 'XBTUSD', size=1.0)   # Buy futures when discount is high
+            else:
+                self.signal('bitmex', 'XBTUSD', size=None)  # No signal
 
-			upward_bid_difference = bid_difference if bid_difference > 0 else 0 
-			downward_ask_difference = -ask_difference if ask_difference < 0 else 0
-			
-			# logger.info(f"{bid_mean=}, {ask_mean=}, {bid_std=}, {ask_std=}")
-			# logger.info(f"{bid_difference=}, {upward_bid_difference=}")
-			# logger.info(f"{ask_difference=}, {downward_ask_difference=}")
-
-			if upward_bid_difference - bid_mean > bid_std:
-				logger.info("BTC Perp is high")
-				logger.info(f"{bid_mean=}, {bid_std=}, {bid_difference=}, {upward_bid_difference=}")
-				self.signal('bitmex', 'XBTUSD', size=-1.0)	# Sell - revert to mean
-			elif ask_mean - ask_difference < ask_std:  # @todo
-				logger.info("BTC Perp is low")
-				logger.info(f"{ask_mean=}, {ask_std=}, {ask_difference=}, {downward_ask_difference=}")
-				self.signal('bitmex', 'XBTUSD', size=1.0)  # Buy - revert to mean
-			else: self.signal('bitmex', 'XBTUSD', size=None)
-
-		logger.info(f"Differences (Premium/Discount) - Ask: ${(implied_ibit_ask - ask):,.2f} USD; Bid: ${(implied_ibit_bid - bid):,.2f}")
-		self.ibit_quote_changed = False
+            logger.info(f"Differences (Premium/Discount) - Ask: ${ask_difference:,.2f} USD; Bid: ${bid_difference:,.2f}")
+            
+        self.ibit_quote_changed = False
 
 	@http.route
     def get_start_stream(self, data):
