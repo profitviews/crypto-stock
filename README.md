@@ -141,7 +141,7 @@ elif ask_zscore > MIN_ZSCORE:  # Discount
 else: self.signal('bitmex', 'XBTUSD', size=None)
 ```
 
-This uses ProfitView's Position Bot type in a very simplistic way: it goes progressively long (up to the Bot user's configured maximum) based on the t-score between the IBIT implied price and Bitcoin perp bid quotes - and progressively short on the ask side.  Bot creators with more time would do a more nuanced and effective job of this - but this gives you the idea.
+This uses ProfitView's Position Bot type in a very simplistic way: it goes progressively long (up to the Bot user's configured maximum) based on the z-score between the IBIT implied price and Bitcoin perp bid quotes - and progressively short on the ask side.  Bot creators with more time would do a more nuanced and effective job of this - but this gives you the idea.
 
 When I was testing the Signal I became very frustrated - everything seemed in place but I wasn't getting any IBIT data.  I poured over the code looking for bugs - then it suddenly started working. What? I twigged: it had just turned 9:30am in New York - the market openning!  I'd become so used to crypto's 24/7 hours...
 
