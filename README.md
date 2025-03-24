@@ -119,17 +119,29 @@ def implied_btc(share_price, total_btc_held, total_shares_outstanding):
 
 ## Executing the Arbitrage
 
-ProfitView's powerful signaling framework allows the strategy to send signals directly to the trading Bot when price deviations exceed a certain statistical threshold (e.g., 1 standard deviation from the mean). Here’s a simplified view:
+ProfitView's powerful signaling framework allows the strategy to send signals directly to the trading Bot when price deviations exceed a certain statistical threshold (e.g., ½ standard deviation from the mean). Here’s a simplified view:
 
 ```python
-if bid_difference - bid_mean > bid_std: 
-    self.signal('bitmex', 'XBTUSD', size=1.0)
-elif ask_mean - ask_difference < ask_std: 
-    self.signal('bitmex', 'XBTUSD', size=-1.0)
+MIN_ZSCORE = 0.5
+
+def calculate_size(zscore):
+    if abs(zscore) < MIN_ZSCORE:
+        return None
+    return np.tanh((abs(zscore) - MIN_ZSCORE) * 1.5)
+
+# Trading signals based on z-scores
+if bid_zscore > MIN_ZSCORE:  # Premium
+    if size := calculate_size(bid_zscore):
+        size = -size  # Negative for selling
+        self.signal('bitmex', 'XBTUSD', size=size)
+elif ask_zscore > MIN_ZSCORE:  # Discount
+    size = calculate_size(ask_zscore)
+    if size := calculate_size(ask_zscore):
+        self.signal('bitmex', 'XBTUSD', size=size)
 else: self.signal('bitmex', 'XBTUSD', size=None)
 ```
 
-This uses ProfitView's Position Bot type in a very simplistic way: it goes fully long (up to the Bot user's configured maximum) when there's a greater than a standard deviation between the IBIT implied price and Bitcoin perp bid quotes - and fully short on the ask side.  Bot creators with more time would do a more nuanced and effective job of this - but this gives you the idea.
+This uses ProfitView's Position Bot type in a very simplistic way: it goes progressively long (up to the Bot user's configured maximum) based on the t-score between the IBIT implied price and Bitcoin perp bid quotes - and progressively short on the ask side.  Bot creators with more time would do a more nuanced and effective job of this - but this gives you the idea.
 
 When I was testing the Signal I became very frustrated - everything seemed in place but I wasn't getting any IBIT data.  I poured over the code looking for bugs - then it suddenly started working. What? I twigged: it had just turned 9:30am in New York - the market openning!  I'd become so used to crypto's 24/7 hours...
 
