@@ -67,7 +67,7 @@ btc_held = float(btc_held_string.replace(",",""))
 
 ### 2. Real-Time Price Streaming
 
-Next, we establish a real-time stream of IBIT ETF quotes using Alpaca's WebSocket API integrated directly into ProfitView. This showcases ProfitView’s flexibility by using asynchronous programming (`asyncio`), WebSockets, and to bring in a custom library (`venues`) to handle real-time data efficiently. We put the streaming logic together in `venues` and create a callback system to provide clients with a way to hook in their trading algo specifics.  All part of the ProfitView mantra of Make Traders Better™:
+Next, we establish a real-time stream of IBIT ETF quotes using Alpaca's WebSocket API integrated directly into ProfitView. This showcases ProfitView’s flexibility by using asynchronous programming (`asyncio`), WebSockets, and to bring in a custom library (`venues`) to handle real-time data efficiently.  We showed you how to use custom libraries in our [previous blog post](https://profitview.net/blog/multi-asset-algorithmic-trading-with-python-extending-profitview-beyond-crypto-to-oanda-forex).  We put the streaming logic together in `venues` and create a callback system to provide clients with a way to hook in their trading algo specifics.  All part of the ProfitView mantra of Make Traders Better™:
 ```python
 def __init__(self, instruments, venue, api_key=None):
     # ...
