@@ -145,7 +145,7 @@ This uses ProfitView's Position Bot type in a very simplistic way: it goes progr
 
 When I was testing the Signal I became very frustrated - everything seemed in place but I wasn't getting any IBIT data.  I poured over the code looking for bugs - then it suddenly started working. What? I twigged: it had just turned 9:30am in New York - the market openning!  I'd become so used to crypto's 24/7 hours...
 
-Since ProfitView's Bot framework powers BitMEX's bots directly, anyone with a BitMEX account can run this Bot seamlessly without additional integrations. See the Bot in action on [BitMEX here](https://www.bitmex.com/app/trade/XBTUSD?botId=370ece8a-068a-4ed3-a8ca-13e60ec909ec&action=share).
+Since ProfitView's Bot framework powers BitMEX's bots directly, anyone with a BitMEX account can run this Bot seamlessly without additional integrations. For those in the Beta programme you can see the Bot in action on [BitMEX here](https://www.bitmex.com/app/trade/XBTUSD?botId=370ece8a-068a-4ed3-a8ca-13e60ec909ec&action=share&utm_source=profitview_blog&utm_medium=blog&utm_campaign=ibit_bitmex_arbitrage).  Please email support@bitmex.com to get in that programme.
 
 The Bot automatically manages positions on BitMEX based on these signals, ensuring trades execute promptly to exploit price inefficiencies.
 
